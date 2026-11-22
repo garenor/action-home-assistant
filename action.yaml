@@ -1,6 +1,8 @@
 ---
 name: "Frenck's Home Assistant Core Configuration Check"
+
 description: 🚀 Frenck's GitHub Action for running a Home Assistant config check.
+
 author: frenck
 
 branding:
@@ -12,25 +14,29 @@ inputs:
     description: Path to the folder containing the Home Assistant configuration
     default: "."
     required: false
+
   secrets:
     description: Alternative secrets file to use
     required: false
+
   version:
     description: Version to use; dev/beta/stable or a specific version number
     required: false
+
   env_file:
     description: Possible path to environment file to use
     required: false
 
 runs:
-  using: "composite"
+  using: composite
   steps:
-    - name: 🏗  Check if the configuration is actually there
+    - name: 🏗 Check if the configuration is actually there
       id: check
       shell: bash
       run: |
         path="${{ inputs.path }}"
         path="${path%/}"
+
         if [[ ! -d "${path}" ]]; then
           echo "::error ::Could not find specified configuration path: ${path}"
           exit 1
@@ -53,42 +59,36 @@ runs:
         secrets="${{ inputs.secrets }}"
         secrets="${secrets%/}"
 
-        if [[ -d "${secrets}" ]] && [[ -f "${secrets}/secrets.yaml" ]];
-        then
+        if [[ -d "${secrets}" ]] && [[ -f "${secrets}/secrets.yaml" ]]; then
           secrets="${secrets}/secrets.yaml"
         elif [[ -d "${{ steps.check.outputs.path }}/${secrets}" ]] && \
-          [[ -f "${{ steps.check.outputs.path }}/${secrets}/secrets.yaml" ]];
-        then
+          [[ -f "${{ steps.check.outputs.path }}/${secrets}/secrets.yaml" ]]; then
           secrets="${{ steps.check.outputs.path }}/${secrets}/secrets.yaml"
-        elif [[ -f "${{ steps.check.outputs.path }}/${secrets}" ]];
-        then
+        elif [[ -f "${{ steps.check.outputs.path }}/${secrets}" ]]; then
           secrets="${{ steps.check.outputs.path }}/${secrets}"
-        elif [[ ! -f "${secrets}" ]];
-        then
-          echo "::error ::Could not find specified secrets file:"\
-            " ${{ inputs.secrets }}"
+        elif [[ ! -f "${secrets}" ]]; then
+          echo "::error ::Could not find specified secrets file: ${{ inputs.secrets }}"
           exit 1
         fi
 
         cp "${secrets}" "${{ steps.check.outputs.path }}/secrets.yaml"
 
-    - name: 🏗  Determine & download requested Home Assistant version
-      shell: bash
+    - name: 🏗 Determine & download requested Home Assistant version
       id: version
+      shell: bash
       run: |
         version="${{ inputs.version }}"
+
         if [[ -z "${version}" ]]; then
           if [[ -f "${{ steps.check.outputs.path }}/.HA_VERSION" ]]; then
             version=$(<"${{ steps.check.outputs.path }}/.HA_VERSION")
           else
-            echo "::warning ::No specific version found or specified;"\
-              "Using 'stable' instead. Specify the version in the GitHub"\
-              "Action or ensure the '.HA_VERSION' file is in your repository."
+            echo "::warning ::No specific version found or specified; Using 'stable' instead. Specify the version in the GitHub Action or ensure the '.HA_VERSION' file is in your repository."
             version="stable"
           fi
         fi
-        echo "version=${version}" >> "$GITHUB_OUTPUT"
 
+        echo "version=${version}" >> "$GITHUB_OUTPUT"
         docker pull -q "ghcr.io/home-assistant/home-assistant:${version}"
 
     - name: 🏗 Register Home Assistant problem matcher
@@ -101,20 +101,60 @@ runs:
       shell: bash
       # yamllint disable rule:line-length
       run: |
+        set -euo pipefail
+
+        # Resolve the NAS-visible host path for this job's workspace mount.
+        host_workspace=""
+        while IFS=$'\t' read -r destination source; do
+          if [[ "$destination" == "$GITHUB_WORKSPACE" ]]; then
+            host_workspace="$source"
+            break
+          fi
+        done < <(
+          docker inspect --format \
+            '{{range .Mounts}}{{printf "%s\t%s\n" .Destination .Source}}{{end}}' \
+            "$HOSTNAME"
+        )
+
+        if [[ -z "$host_workspace" || ! -d "$host_workspace" ]]; then
+          echo "::error ::Could not find the host-side Docker mount for GITHUB_WORKSPACE ($GITHUB_WORKSPACE)"
+          exit 1
+        fi
+
+        config_path="${{ steps.check.outputs.path }}"
+        config_path="${config_path#./}"
+
+        if [[ "$config_path" == "." || -z "$config_path" ]]; then
+          container_config="/github/workspace"
+        else
+          container_config="/github/workspace/${config_path#/}"
+        fi
+
         docker run --rm \
           --entrypoint "" \
           "ghcr.io/home-assistant/home-assistant:${{ steps.version.outputs.version }}" \
-            python -m homeassistant --version
-        env_file_arg=""
-        if [[ -f "${{ inputs.env_file }}" ]]; then
-          env_file_arg="--env-file ${{ inputs.env_file }}"
+          python -m homeassistant --version
+
+        env_file_args=()
+        env_file="${{ inputs.env_file }}"
+
+        if [[ -n "$env_file" ]]; then
+          env_file="${env_file#./}"
+
+          if [[ -f "$host_workspace/$env_file" ]]; then
+            env_file_args=(--env-file "$host_workspace/$env_file")
+          elif [[ -f "$GITHUB_WORKSPACE/$env_file" ]]; then
+            echo "::error ::The env_file exists in the job container but its host-side path could not be resolved"
+            exit 1
+          fi
         fi
+
         docker run --rm \
           --entrypoint "" \
-          -v $(pwd):/github/workspace \
-          $env_file_arg \
+          --mount "type=bind,src=${host_workspace},dst=/github/workspace,readonly" \
+          "${env_file_args[@]}" \
           --workdir /github/workspace \
           "ghcr.io/home-assistant/home-assistant:${{ steps.version.outputs.version }}" \
-            python -m homeassistant \
-              --config "${{ steps.check.outputs.path }}" \
-              --script check_config
+          python -m homeassistant \
+          --config "$container_config" \
+          --script check_config

@@ -147,9 +147,12 @@ runs:
           fi
         fi
 
+        mkdir -p "$GITHUB_WORKSPACE/share/nginx_assets"
+
         docker run --rm \
           --entrypoint "" \
           --mount "type=bind,src=${host_workspace},dst=/github/workspace,readonly" \
+          --mount "type=bind,src=${host_workspace}/share,dst=/share,readonly" \
           "${env_file_args[@]}" \
           --workdir /github/workspace \
           "ghcr.io/home-assistant/home-assistant:${{ steps.version.outputs.version }}" \

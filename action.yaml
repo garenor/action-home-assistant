@@ -104,29 +104,20 @@ runs:
         set -euo pipefail
 
         # Resolve the NAS-visible host path for this job's workspace mount.
-        host_workspace=""
-        while IFS=$'\t' read -r destination source; do
-          if [[ "$destination" == "$GITHUB_WORKSPACE" ]]; then
-            host_workspace="$source"
-            break
-          fi
-        done < <(
+        host_workspace="$(
           docker inspect --format \
-            '{{range .Mounts}}{{printf "%s\t%s\n" .Destination .Source}}{{end}}' \
-            "$HOSTNAME"
-        )
-
-        echo "HOSTNAME=$HOSTNAME"
-        echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
+            '{{range .Mounts}}{{printf "%s|%s\n" .Destination .Source}}{{end}}' \
+            "$HOSTNAME" |
+            awk -F'|' -v workspace="$GITHUB_WORKSPACE" \
+              '$1 == workspace { print $2; exit }'
+        )"
         
-        docker inspect --format \
-          '{{range .Mounts}}{{printf "destination=%s source=%s\n" .Destination .Source}}{{end}}' \
-          "$HOSTNAME"
-
         if [[ -z "$host_workspace" || ! -d "$host_workspace" ]]; then
           echo "::error ::Could not find the host-side Docker mount for GITHUB_WORKSPACE ($GITHUB_WORKSPACE)"
           exit 1
         fi
+        
+        echo "Host workspace: $host_workspace"
 
         config_path="${{ steps.check.outputs.path }}"
         config_path="${config_path#./}"

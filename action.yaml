@@ -112,7 +112,7 @@ runs:
               '$1 == workspace { print $2; exit }'
         )"
         
-        if [[ -z "$host_workspace" || ! -d "$host_workspace" ]]; then
+        if [[ -z "$host_workspace" ]]; then
           echo "::error ::Could not find the host-side Docker mount for GITHUB_WORKSPACE ($GITHUB_WORKSPACE)"
           exit 1
         fi
